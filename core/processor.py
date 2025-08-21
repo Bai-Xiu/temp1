@@ -339,80 +339,58 @@ class LogAIProcessor:
         return code_block
 
     def direct_answer(self, user_request, file_names):
-        """直接回答模式：生成日志总结，不返回表格数据"""
-        data_dict = self._load_file_data(file_names)
+        """直接回答模式：对全部数据脱敏后调用API，不展示表格内容"""
+        if not self.client:
+            return {
+                "summary": "未配置API密钥，无法进行直接回答",
+                "result_table": None,  # 直接回答模式不展示表格
+                "chart_info": None
+            }
 
-        # 收集文件详细信息（包含敏感词处理）
-        file_details = []
+        # 加载数据并脱敏（处理全部数据）
+        data_dict = self._load_file_data(file_names)
+        file_info = {}
         for filename, df in data_dict.items():
-            # 1. 处理列名中的敏感词
-            processed_columns = [
-                self.sensitive_processor.normalize_to_replacement(col)
+            # 1. 脱敏列名
+            replaced_columns = [
+                self.sensitive_processor.replace_sensitive_words(col)[0]
                 for col in df.columns.tolist()
             ]
 
-            # 2. 处理数据样本中的敏感词
-            processed_samples = []
-            for sample in df.head(min(3, len(df))).to_dict(orient='records'):
-                processed_sample = {}
-                for key, value in sample.items():
+            # 2. 脱敏全部数据（不再只传样本，而是全部记录）
+            replaced_records = []
+            for record in df.to_dict(orient='records'):  # 遍历所有行，而非head(2)
+                replaced_record = {}
+                for key, value in record.items():
                     if isinstance(value, str):
-                        processed_val = self.sensitive_processor.normalize_to_replacement(value)
-                        processed_sample[key] = processed_val
+                        # 对字符串类型脱敏
+                        replaced_val, _ = self.sensitive_processor.replace_sensitive_words(value)
+                        replaced_record[key] = replaced_val
                     else:
-                        processed_sample[key] = value
-                processed_samples.append(processed_sample)
+                        replaced_record[key] = value  # 非字符串保持原样
+                replaced_records.append(replaced_record)
 
-            # 基础信息（使用处理后的列名和样本）
-            details = {
-                "文件名": filename,
-                "记录数": len(df),
-                "列名": processed_columns,
-                "数据类型分布": {col: str(df[col].dtype) for col in df.columns},
-                "数据样本": processed_samples  # 最多3行样本
+            file_info[filename] = {
+                "columns": replaced_columns,
+                "records": replaced_records  # 用全部记录替换样本
             }
 
-            # 数值列统计（无需处理敏感词）
-            numeric_stats = {}
-            for col in df.columns:
-                if pd.api.types.is_numeric_dtype(df[col]):
-                    numeric_stats[col] = {
-                        "平均值": df[col].mean(),
-                        "最小值": df[col].min(),
-                        "最大值": df[col].max(),
-                        "非空值数量": df[col].count()
-                    }
-            if numeric_stats:
-                details["数值列统计"] = numeric_stats
+        # 构建脱敏后的prompt（明确基于全部数据回答）
+        prompt = f"""用户需求: {user_request}
+    数据信息: {json.dumps(file_info, ensure_ascii=False)}
 
-            file_details.append(details)
+    请基于提供的全部数据信息回答用户问题，无需生成代码。
+    """
 
-        # 处理用户请求中的敏感词
-        processed_request = self.sensitive_processor.normalize_to_replacement(user_request)
+        # 调用API（仅传递脱敏数据）
+        response = self.client.completions_create(prompt=prompt)
+        raw_summary = response.choices[0].message.content
 
-        # 构建提示词（使用处理后的请求和文件详情）
-        prompt = f"""基于以下日志文件的详细信息，回答用户问题并生成总结:
-    文件详情: {json.dumps(file_details, ensure_ascii=False, default=str)}
-    用户问题: {processed_request}
+        # 本地还原总结内容（关键修改：确保在本地完成还原）
+        restored_summary = self.sensitive_processor.restore_sensitive_words(raw_summary)
 
-    回答要求:
-    1. 深入分析日志数据特征、潜在规律和关键信息
-    2. 直接给出自然语言总结，不生成任何表格或结构化数据
-    3. 内容具体有针对性，避免泛泛而谈
-    4. 涉及统计信息时自然体现关键数值
-    5. 用简洁易懂的中文表达"""
-
-        # 调用API
-        response = self.client.completions_create(
-            model='deepseek-reasoner',
-            prompt=prompt,
-            max_tokens=5000,
-            temperature=1.0
-        )
-
-        # 对返回结果进行敏感词还原（关键修复：之前缺少这一步）
-        restored_summary = self.sensitive_processor.restore_sensitive_words(
-            response.choices[0].message.content.strip()
-        )
-
-        return {"summary": restored_summary}
+        return {
+            "summary": restored_summary,  # 返回还原后的总结
+            "result_table": None,  # 直接回答模式不返回表格
+            "chart_info": None
+        }

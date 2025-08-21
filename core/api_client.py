@@ -30,7 +30,7 @@ class DeepSeekAPI:
                     model=model,
                     messages=[
                         {"role": "system",
-                         "content": "你是专业的信息安全日志分析专家，根据用户要求解决日志分析问题。用户提供的数据中形如PROTECTED_XXXXXXXX的内容是受保护的字段，应当作为整体，不影响语义理解"},
+                         "content": "你是专业的信息安全日志分析专家，根据用户要求解决日志分析问题。用户提供的数据中形如PROTECTEDXXXXXXXX的内容是受保护的字段，使用时保持完整，不影响语义理解"},
                         {"role": "user", "content": processed_prompt}
                     ],
                     max_tokens=max_tokens,
