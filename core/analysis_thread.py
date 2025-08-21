@@ -52,9 +52,21 @@ class AnalysisThread(QThread):
 
     def execute_cleaned_code(self, cleaned_code, data_dict):
         """执行代码并简化图表配置校验，使用预加载的数据"""
+        # 先对数据进行敏感词替换，确保执行环境中只有替换词
+        processed_data = {}
+        for filename, df in data_dict.items():
+            df_copy = df.copy()
+            # 对每一列进行敏感词处理
+            for col in df_copy.columns:
+                if df_copy[col].dtype == 'object':
+                    df_copy[col] = df_copy[col].astype(str).apply(
+                        lambda x: self.processor.sensitive_processor.normalize_to_replacement(x) if pd.notna(x) else x
+                    )
+            processed_data[filename] = df_copy
+
         full_code = f"{cleaned_code}\n"
         local_vars = {
-            'data_dict': data_dict,
+            'data_dict': processed_data,  # 使用处理后的数据
             'pd': pd,
             'np': np
         }
@@ -65,9 +77,10 @@ class AnalysisThread(QThread):
             summary = local_vars.get('summary', '分析完成但未生成总结')
             chart_info = local_vars.get('chart_info', None)
 
+            # 对结果进行敏感词还原，用于UI展示
             summary = self.processor.sensitive_processor.restore_sensitive_words(summary)
 
-            # 2. 还原表格数据（处理字符串列）
+            # 还原表格数据（处理字符串列）
             if result_table is not None and isinstance(result_table, pd.DataFrame):
                 for col in result_table.columns:
                     if result_table[col].dtype == 'object':
@@ -76,36 +89,31 @@ class AnalysisThread(QThread):
                                 x) else x
                         )
 
-            # 3. 还原图表信息中的文本（如标题、标签等）
+            # 还原图表信息中的文本
             if chart_info and isinstance(chart_info, dict):
-                # 还原标题
                 if 'title' in chart_info:
                     chart_info['title'] = self.processor.sensitive_processor.restore_sensitive_words(
                         chart_info['title'])
-                # 还原数据预处理中的文本（如有）
                 if 'data_prep' in chart_info and isinstance(chart_info['data_prep'], dict):
                     for key, value in chart_info['data_prep'].items():
                         if isinstance(value, str):
                             chart_info['data_prep'][key] = self.processor.sensitive_processor.restore_sensitive_words(
                                 value)
 
-            # 简化校验：只做必要检查，不强制禁用图表，仅添加警告
+            # 简化校验
             if chart_info and isinstance(chart_info, dict):
-                # 检查顶级必要字段
                 top_required = ["chart_type", "title", "data_prep"]
                 missing_top = [f for f in top_required if f not in chart_info]
                 if missing_top:
                     summary += f"\n警告：图表配置缺少顶级字段 {missing_top}"
 
-                # 检查data_prep子字典
                 data_prep = chart_info.get("data_prep", {})
                 if not isinstance(data_prep, dict):
                     summary += "\n警告：data_prep必须是字典类型"
-                    chart_info["data_prep"] = {}  # 避免后续报错
+                    chart_info["data_prep"] = {}
 
-            # 确保result_table存在
             if result_table is None:
-                result_table = pd.concat(data_dict.values(), ignore_index=True)
+                result_table = pd.concat(processed_data.values(), ignore_index=True)
                 summary = "未生成有效分析结果，返回原始数据合并表格\n" + summary
 
             return {

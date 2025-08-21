@@ -87,7 +87,6 @@ class LogAIProcessor:
             return self.current_data
 
         data_dict = {}
-        # 对于大量文件，使用线程池加速加载
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def load_single_file(file_name):
@@ -106,9 +105,16 @@ class LogAIProcessor:
 
             processor = self.extension_map[ext]
             df = processor.read_file(full_path, encodings=self.supported_encodings)
-            return safe_file, df
 
-        # 使用线程池并行加载文件
+            # 加载后立即进行敏感词处理
+            df_copy = df.copy()
+            for col in df_copy.columns:
+                if df_copy[col].dtype == 'object':
+                    df_copy[col] = df_copy[col].astype(str).apply(
+                        lambda x: self.sensitive_processor.normalize_to_replacement(x) if pd.notna(x) else x
+                    )
+            return safe_file, df_copy
+
         with ThreadPoolExecutor(max_workers=min(4, len(file_names))) as executor:
             futures = {executor.submit(load_single_file, fn): fn for fn in file_names}
 
@@ -191,20 +197,24 @@ class LogAIProcessor:
         if not self.client:
             # 默认代码：直接返回所有数据
             return """import pandas as pd
-result_table = pd.concat(data_dict.values(), ignore_index=True)
-# 转换所有时间类型列
-for col in result_table.columns:
-    if pd.api.types.is_datetime64_any_dtype(result_table[col]):
-        result_table[col] = result_table[col].astype(str)
-summary = f'共{len(result_table)}条记录
+    result_table = pd.concat(data_dict.values(), ignore_index=True)
+    # 转换所有时间类型列
+    for col in result_table.columns:
+        if pd.api.types.is_datetime64_any_dtype(result_table[col]):
+            result_table[col] = result_table[col].astype(str)
+    summary = f'共{len(result_table)}条记录'
     chart_info = None"""
 
         data_dict = self._load_file_data(file_names)
         file_info = {}
+
+        # 处理用户请求，确保其中的敏感词被统一替换
+        processed_request = self.sensitive_processor.normalize_to_replacement(user_request)
+
         for filename, df in data_dict.items():
             # 1. 替换列名中的敏感词
             replaced_columns = [
-                self.sensitive_processor.replace_sensitive_words(col)[0]
+                self.sensitive_processor.normalize_to_replacement(col)
                 for col in df.columns.tolist()
             ]
 
@@ -215,7 +225,7 @@ summary = f'共{len(result_table)}条记录
                 for key, value in sample.items():
                     # 对每个字段值进行替换（处理字符串类型）
                     if isinstance(value, str):
-                        replaced_val, _ = self.sensitive_processor.replace_sensitive_words(value)
+                        replaced_val = self.sensitive_processor.normalize_to_replacement(value)
                         replaced_sample[key] = replaced_val
                     else:
                         replaced_sample[key] = value  # 非字符串类型保持不变
@@ -226,6 +236,7 @@ summary = f'共{len(result_table)}条记录
                 "sample": replaced_samples
             }
 
+        # 3. 生成代码
         prompt = f"""根据用户请求编写完整的Python处理代码:
 用户需求: {user_request}
 数据信息: {json.dumps(file_info, ensure_ascii=False)}
@@ -331,19 +342,37 @@ summary = f'共{len(result_table)}条记录
         """直接回答模式：生成日志总结，不返回表格数据"""
         data_dict = self._load_file_data(file_names)
 
-        # 收集文件详细信息
+        # 收集文件详细信息（包含敏感词处理）
         file_details = []
         for filename, df in data_dict.items():
-            # 基础信息
+            # 1. 处理列名中的敏感词
+            processed_columns = [
+                self.sensitive_processor.normalize_to_replacement(col)
+                for col in df.columns.tolist()
+            ]
+
+            # 2. 处理数据样本中的敏感词
+            processed_samples = []
+            for sample in df.head(min(3, len(df))).to_dict(orient='records'):
+                processed_sample = {}
+                for key, value in sample.items():
+                    if isinstance(value, str):
+                        processed_val = self.sensitive_processor.normalize_to_replacement(value)
+                        processed_sample[key] = processed_val
+                    else:
+                        processed_sample[key] = value
+                processed_samples.append(processed_sample)
+
+            # 基础信息（使用处理后的列名和样本）
             details = {
                 "文件名": filename,
                 "记录数": len(df),
-                "列名": df.columns.tolist(),
+                "列名": processed_columns,
                 "数据类型分布": {col: str(df[col].dtype) for col in df.columns},
-                "数据样本": df.head(min(3, len(df))).to_dict(orient='records')  # 最多3行样本
+                "数据样本": processed_samples  # 最多3行样本
             }
 
-            # 数值列统计
+            # 数值列统计（无需处理敏感词）
             numeric_stats = {}
             for col in df.columns:
                 if pd.api.types.is_numeric_dtype(df[col]):
@@ -358,10 +387,13 @@ summary = f'共{len(result_table)}条记录
 
             file_details.append(details)
 
-        # 构建提示词
+        # 处理用户请求中的敏感词
+        processed_request = self.sensitive_processor.normalize_to_replacement(user_request)
+
+        # 构建提示词（使用处理后的请求和文件详情）
         prompt = f"""基于以下日志文件的详细信息，回答用户问题并生成总结:
     文件详情: {json.dumps(file_details, ensure_ascii=False, default=str)}
-    用户问题: {user_request}
+    用户问题: {processed_request}
 
     回答要求:
     1. 深入分析日志数据特征、潜在规律和关键信息
@@ -378,6 +410,9 @@ summary = f'共{len(result_table)}条记录
             temperature=1.0
         )
 
+        # 对返回结果进行敏感词还原（关键修复：之前缺少这一步）
+        restored_summary = self.sensitive_processor.restore_sensitive_words(
+            response.choices[0].message.content.strip()
+        )
 
-        return {"summary": response.choices[0].message.content.strip()}
-
+        return {"summary": restored_summary}

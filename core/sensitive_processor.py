@@ -47,6 +47,21 @@ class SensitiveWordProcessor:
             except Exception as e:
                 print(f"创建敏感词文件失败: {str(e)}")
 
+    def normalize_to_replacement(self, text):
+        """将文本中的原始敏感词或替换词统一转换为替换词"""
+        if not text or not isinstance(text, str):
+            return text
+
+        # 先替换原始敏感词为替换词
+        normalized_text, _ = self.replace_sensitive_words(text)
+
+        # 再检查是否有残留的原始替换词（双重确保）
+        for original, replacement in self.sensitive_words.items():
+            if replacement in normalized_text:
+                normalized_text = normalized_text.replace(replacement, self.sensitive_words[original])
+
+        return normalized_text
+
     def _generate_replacement(self):
         """生成随机替换词: PROTECTED{8位随机大小写字母+数字}"""
         chars = string.ascii_letters + string.digits

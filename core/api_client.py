@@ -19,18 +19,13 @@ class DeepSeekAPI:
             raise ValueError("prompt不能为空")
 
         # 敏感词替换
-        replace_count = None
         processed_prompt = prompt
         if self.sensitive_processor:
-
-            processed_prompt, replace_count = self.sensitive_processor.replace_sensitive_words(prompt)
-
-            # 显示处理后的请求
+            processed_prompt = self.sensitive_processor.normalize_to_replacement(prompt)
 
         attempt = 0
         while attempt < retry:
             try:
-                # 完全对齐官方示例的参数结构
                 response = self.client.chat.completions.create(
                     model=model,
                     messages=[
@@ -43,11 +38,12 @@ class DeepSeekAPI:
                     stream=False
                 )
 
-                # 敏感词还原
-                if self.sensitive_processor and response.choices[0].message.content:
-                    response.choices[0].message.content = self.sensitive_processor.restore_sensitive_words(
-                        response.choices[0].message.content
-                    )
+                # 移除API响应的提前还原，统一在结果处理时还原
+                # 原来的还原代码注释掉：
+                # if self.sensitive_processor and response.choices[0].message.content:
+                #     response.choices[0].message.content = self.sensitive_processor.restore_sensitive_words(
+                #         response.choices[0].message.content
+                #     )
 
                 return response
             except Exception as e:
