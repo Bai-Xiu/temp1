@@ -49,21 +49,9 @@ class AnalysisThread(QThread):
 
     def execute_cleaned_code(self, cleaned_code, data_dict):
         """执行代码并简化图表配置校验，使用预加载的数据"""
-        # 先对数据进行敏感词替换，确保执行环境中只有替换词
-        processed_data = {}
-        for filename, df in data_dict.items():
-            df_copy = df.copy()
-            # 对每一列进行敏感词处理
-            for col in df_copy.columns:
-                if df_copy[col].dtype == 'object':
-                    df_copy[col] = df_copy[col].astype(str).apply(
-                        lambda x: self.processor.sensitive_processor.normalize_to_replacement(x) if pd.notna(x) else x
-                    )
-            processed_data[filename] = df_copy
-
         full_code = f"{cleaned_code}\n"
         local_vars = {
-            'data_dict': processed_data,  # 使用处理后的数据
+            'data_dict': data_dict,
             'pd': pd,
             'np': np
         }
@@ -71,11 +59,12 @@ class AnalysisThread(QThread):
         try:
             exec(full_code, globals(), local_vars)
             result_table = local_vars.get('result_table')
+            # 强制获取总结并进行敏感词还原（确保代码生成模式下必然执行）
             summary = local_vars.get('summary', '分析完成但未生成总结')
-            chart_info = local_vars.get('chart_info', None)
-
-            # 对结果进行敏感词还原，用于UI展示
+            # 关键修改：无论何种情况都对总结执行还原处理
             summary = self.processor.sensitive_processor.restore_sensitive_words(summary)
+
+            chart_info = local_vars.get('chart_info', None)
 
             # 还原表格数据（处理字符串列）
             if result_table is not None and isinstance(result_table, pd.DataFrame):
@@ -97,20 +86,19 @@ class AnalysisThread(QThread):
                             chart_info['data_prep'][key] = self.processor.sensitive_processor.restore_sensitive_words(
                                 value)
 
-            # 简化校验
+            # 图表配置校验警告
             if chart_info and isinstance(chart_info, dict):
                 top_required = ["chart_type", "title", "data_prep"]
                 missing_top = [f for f in top_required if f not in chart_info]
                 if missing_top:
                     summary += f"\n警告：图表配置缺少顶级字段 {missing_top}"
-
                 data_prep = chart_info.get("data_prep", {})
                 if not isinstance(data_prep, dict):
                     summary += "\n警告：data_prep必须是字典类型"
                     chart_info["data_prep"] = {}
 
             if result_table is None:
-                result_table = pd.concat(processed_data.values(), ignore_index=True)
+                result_table = pd.concat(data_dict.values(), ignore_index=True)
                 summary = "未生成有效分析结果，返回原始数据合并表格\n" + summary
 
             return {
@@ -119,8 +107,10 @@ class AnalysisThread(QThread):
                 "chart_info": chart_info
             }
         except Exception as e:
+            # 对错误信息也进行敏感词还原
+            error_msg = f"代码执行错误: {str(e)}\n\n执行的代码:\n{full_code}"
             return {
-                "summary": f"代码执行错误: {str(e)}\n\n执行的代码:\n{full_code}",
+                "summary": self.processor.sensitive_processor.restore_sensitive_words(error_msg),
                 "result_table": None,
                 "chart_info": None
             }
