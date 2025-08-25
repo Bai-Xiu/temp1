@@ -220,7 +220,7 @@ class LogAIProcessor:
 
             # 2. 替换样本数据中的敏感词
             replaced_samples = []
-            for sample in df.head(2).to_dict(orient='records'):
+            for sample in df.head(5).to_dict(orient='records'):
                 replaced_sample = {}
                 for key, value in sample.items():
                     # 对每个字段值进行替换（处理字符串类型）
@@ -241,8 +241,8 @@ class LogAIProcessor:
 用户需求: {user_request}
 数据信息: {json.dumps(file_info, ensure_ascii=False)}
 
+生成代码时必须遵守以下规范：
 重要提示：
-0. 处理数据时，用户提示词输入的内容不一定能在数据中直接找到对应列，遇到这种情况请自行决定
 1. 返回的内容只能是可直接执行的代码
 2. 不要有任何对代码的说明或者其他说明
 3. 保证返回的内容可以直接执行
@@ -324,6 +324,15 @@ class LogAIProcessor:
 1. 逐行检查代码是否存在上述语法错误（重点检查括号、逗号、参数数量）。
 2. 对 `pd.concat`、`pd.groupby` 等高频错误函数，额外确认参数格式（如 `pd.concat` 的第一个参数必须是列表 `[df1, df2]`）。
 3. 假设自己是Python解释器，模拟执行前3行代码，确认无语法报错。
+请基于以下要求生成日志分析代码：
+1. 输入数据为 `data_dict`（键为文件名，值为pandas.DataFrame），需先检查文件是否存在及非空。
+2. 处理逻辑必须：
+   - 调用 `unique()`/`idxmax()` 等方法前，确认对象是非空Series（`isinstance(obj, pd.Series) and not obj.empty`）；
+   - 访问列前用 `col in df.columns` 验证，避免KeyError；
+   - 空数据场景需在 `summary` 中说明，不执行无效操作。
+3. 生成结果需包含 `result_table`（DataFrame）、`summary`（字符串）、`chart_info`（字典，含chart_type/title/data_prep）。
+4. 代码中需处理可能的异常（如AttributeError/KeyError），并在summary中提示具体错误原因。
+5. 保留数据中`PROTECTEDXXXXXXXX`格式的去敏字段，不做修改。
 """
 
         response = self.client.completions_create(
