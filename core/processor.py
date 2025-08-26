@@ -246,9 +246,10 @@ class LogAIProcessor:
 
 ### 一、数据源与基础环境说明
 1. **变量定义强制约束**：
-   - 禁止使用df变量名，需使用`result_table`变量名，避免与项目代码中的DataFrame变量冲突。
-   - 所有使用的变量必须先定义再使用，尤其是数据合并后的主数据变量，需在所有代码路径中确保初始化。
-   - 数据合并必须基于`data_dict`
+   - df变量必须全局定义，且必须是pandas.DataFrame类型，禁止使用其他变量名。
+   - 所有使用的变量必须先定义再使用，尤其是数据合并后的主数据变量（如`df`），需在所有代码路径中确保初始化。
+   - 数据合并必须基于`data_dict`，统一使用`df = pd.concat(data_dict.values(), ignore_index=True)`初始化主数据变量，禁止使用未定义的变量名（如`df_combined`）。
+   - 若`data_dict`为空或无效，需显式初始化`df`为空白DataFrame（`df = pd.DataFrame()`），避免后续引用时报错。
 
 2. **分支逻辑完整性**：
    - 所有条件判断（如`if-else`）必须覆盖完整场景，确保`df`在任何分支中都有定义。
