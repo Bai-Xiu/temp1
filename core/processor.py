@@ -241,98 +241,73 @@ class LogAIProcessor:
 用户需求: {user_request}
 数据信息: {json.dumps(file_info, ensure_ascii=False)}
 
-生成代码时必须遵守以下规范：
-重要提示：
-1. 返回的内容只能是可直接执行的代码
-2. 不要有任何对代码的说明或者其他说明
-3. 保证返回的内容可以直接执行
-4. 不能作为代码执行的内容放在summary字符串中
-5. 代码中使用变量或函数时先进行定义，确保代码可以直接执行
-6. 生成图表时必须确保使用的列存在于数据中
-7. 调用argmax()、idxmax()、argmin()、idxmin()等函数前，必须先检查数据是否为空：
-   - 示例：若需计算df['col'].idxmax()，需先判断`if not df['col'].empty and df['col'].notna().any()`
-   - 若数据为空，需在summary中说明"因数据为空，无法计算最大值/最小值"，避免报错
-8. 处理分组数据（如groupby后）时，需检查每个分组是否为空，再进行聚合操作
-9.如果要在summary中进行说明，请在语句中完整写出受保护数据PROTECTEDXXXXXXXX，不要使用引用
-说明：
-0. 严格保证代码语法与库方法使用正确性：
-   - 所有括号（包括圆括号、方括号、花括号）必须严格匹配，确保每个左括号都有对应的右括号，且嵌套关系正确
-   - 检查所有语句的语法完整性，避免出现未闭合的括号、引号等情况
-   - 所有Pandas方法（如groupby、reset_index、rename等）必须使用官方支持的参数，禁止使用不存在的参数（如reset_index的'name'参数）
-   - 处理DataFrame时：
-   - 在处理 pandas 数据框时，请注意：
-     (1)计算最大值/最小值位置时，`idxmax()`/`idxmin()` 返回的是行索引（整数），而非行数据本身
-     (2)正确步骤应为：先通过 idxmax() 获取索引 → 再用 loc[索引] 获取行数据
-     (3)禁止直接使用 `df.loc[df['列名'].idxmax()]` 的结果作为新的索引值
-     (4)数值列（如计数、数量）应保持整数/浮点类型，避免转为字符串导致计算错误
-     (5)在生成总结文字时，需先获取完整行数据，再提取其中的字段值（如时段和次数）
-   - 特别注意：reset_index()方法不支持'name'参数，如需重命名列请使用rename()或在groupby时指定
-   - 方法参数名称必须准确无误，禁止使用不存在的参数
-   - 检查方法调用的参数数量与类型是否匹配
-1. 已存在变量data_dict（文件名到DataFrame的字典），可直接使用
-2. 必须导入所需的库（如pandas、datetime）
-3. 必须定义三个变量：
-   - result_table：处理后的DataFrame结果（必须存在）
-   - summary：字符串类型的总结，根据用户要求生成具体内容
-     * 关键分析结论（如统计数量、趋势、异常点等）
-     * 数据中发现的规律总结
-     * 针对问题的解决方案或建议
-     * 其他用户要求但无法被作为代码执行的信息
-     禁止使用默认值，必须根据分析结果生成具体内容
-   - chart_info：图表信息字典（** 必须包含chart_type字段 **），格式为:
-     {{
-       "chart_type": "bar/line/pie/scatter/hist",  # 强制必填，且为支持的类型
-       "title": "图表标题",  # 强制必填
-       "data_prep": {{
-         "x_col": "x轴数据列名",  # bar/line/scatter/hist必须提供
-         "y_col": "y轴数据列名",  # bar/line/scatter可选
-         "values": "值列名",  # pie必须提供
-         "bins": 分箱数  # hist可选
-       }}
+
+请根据用户需求生成日志分析代码，生成代码时必须严格遵循以下与项目代码适配的规范，确保代码可直接执行且符合项目逻辑：
+
+### 一、数据源与基础环境说明
+1. **变量定义强制约束**：
+   - 禁止使用df变量名，需使用`result_table`变量名，避免与项目代码中的DataFrame变量冲突。
+   - 所有使用的变量必须先定义再使用，尤其是数据合并后的主数据变量，需在所有代码路径中确保初始化。
+   - 数据合并必须基于`data_dict`
+
+2. **分支逻辑完整性**：
+   - 所有条件判断（如`if-else`）必须覆盖完整场景，确保`df`在任何分支中都有定义。
+   - 对`pd.concat`等可能抛出异常的操作，必须包裹`try-except`块，异常分支中需显式定义`df = pd.DataFrame()`。
+
+3. **代码可执行性**：
+   - 禁止引用未定义的变量、函数或模块，需提前导入`pandas`（`import pandas as pd`）。
+   - 生成的代码必须包含完整的变量初始化、数据处理、结果输出（`result_table`、`summary`、`chart_info`）逻辑，可直接在包含`data_dict`的环境中运行。
+
+4. **敏感词处理兼容**：
+   - 代码中涉及的列名、文本处理需兼容`PROTECTEDxxxx`格式的敏感词替换结果，不影响变量定义和逻辑执行。
+
+### 二、必须定义的核心变量规范
+1. `result_table`：类型为`pandas.DataFrame`（必须存在），存储处理后的核心数据
+   - 时间类型列（`datetime64`）需显式转换为字符串（如`df['time'] = df['time'].astype(str)`）
+   - 含中文的列需显式转换为字符串类型（如`df['level'] = df['level'].astype(str)`）
+2. `summary`：字符串类型，存储分析结论，需包含：
+   - 关键分析结果（统计数量、趋势等）
+   - 数据规律总结
+   - 异常情况说明（如空数据、缺失列）
+   - 禁止使用默认值，必须基于实际分析生成
+   - 涉及敏感词需保留`PROTECTEDXXXXXXXX`格式，不得使用引用
+3. `chart_info`：图表信息字典（或`None`），必须符合以下格式：
+   {{
+     "chart_type": "bar/line/pie/scatter/hist",  # 仅支持这5种类型
+     "title": "图表标题",  # 强制必填
+     "data_prep": {{
+       "x_col": "x轴数据列名",  # bar/line/scatter/hist必填
+       "y_col": "y轴数据列名",  # bar/line/scatter必填
+       "values": "值列名",     # pie必填
+       "bins": 分箱数          # hist可选，默认10
      }}
-     这是图表信息的模板，chart_type字段按照这些关键词对应：bar柱状图/line折线图/scatter散点图/hist直方图/pie饼图
-     生成代码时根据图表类型检查必要的列配置
-            'bar': ['x_col', 'y_col']
-            'line': ['x_col', 'y_col']
-            'scatter': ['x_col', 'y_col']
-            'pie': ['x_col', 'values']
-            'hist': ['x_col']
-     当用户说生成“图表”这类泛指时，由你决定图表类型（即chart_type字段）
-     若不需要图表，chart_info必须显式设置为None；若需要图表，所有标注"必须"的字段均为必填项
-     在生成图表信息时，需严格遵循以下规范：
-     (1)列名验证前置：生成`chart_info`前，必须先获取`result_table`的所有列名（通过`result_table.columns.tolist()`），并确认所有指定的列（如`x_col`、`y_col`、`values`）均在列名列表中，禁止使用数据中不存在的列名。
-     (2)动态适配列名：若用户需求中提到的列名（如“次数”）与`result_table`实际列名不一致，需使用实际列名，并在`summary`中说明列名对应关系（例如：“注：图表中使用的‘count’列对应需求中的‘次数’”）。
-     (3)错误规避处理：若用户需求中的列名不存在且无替代列，应放弃生成该图表，将`chart_info`设为`None`，并在`summary`中说明原因（例如：“因数据中无‘次数’列，无法生成对应图表”）。
-     (4)显式列名引用：在`chart_info`的`data_prep`中，所有列名必须直接引用`result_table`中存在的列，禁止使用任何推测性列名或别名。
-4. 处理时间/日期类型列（如包含timestamp、datetime的列）：
-   - 必须显式转换为字符串类型（如df['time'] = df['time'].astype(str)或df['time'] = df['time'].dt.strftime('%Y-%m-%d %H:%M:%S')）
-   - 确保无任何Timestamp类型数据残留，避免JSON序列化错误
-5. 处理含中文的列（如"低/中/高"）：显式转换为字符串类型（df['level'] = df['level'].astype(str)）
-6. 对同义表头进行统一命名和内容整合
-7. 进行列重命名时，确保新列名的数量与 DataFrame 实际列数完全一致
-8. 若需重置索引，优先使用 drop=True 参数（如 reset_index (drop=True)）避免引入多余的索引列
-强制语法检查清单：
-1. 括号完整性：
-   - 所有圆括号、方括号、花括号必须成对出现，嵌套关系正确（如函数参数括号、列表括号）。
-   - 反面示例：`pd.concat([df1, axis=0)`（缺少右括号和第二个DataFrame参数）是绝对禁止的。
-2. 参数完整性：
-   - 函数调用必须包含必要参数（如 `pd.concat` 必须传入包含至少一个DataFrame的列表作为第一个参数）。
-   - 反面示例：`pd.concat([df1])` 虽然语法正确，但需确认是否遗漏其他需合并的DataFrame（如 `df2`）。
-3. 语句终结符：每行代码末尾无多余逗号/括号（如 `df['col'] = 1,` 会导致语法错误）。
-4. 变量引用有效性：确保所有引用的变量已定义（如合并时使用的 `df2` 必须在之前被正确定义为 `data_dict` 中的数据）。
-生成后自检流程
-1. 逐行检查代码是否存在上述语法错误（重点检查括号、逗号、参数数量）。
-2. 对 `pd.concat`、`pd.groupby` 等高频错误函数，额外确认参数格式（如 `pd.concat` 的第一个参数必须是列表 `[df1, df2]`）。
-3. 假设自己是Python解释器，模拟执行前3行代码，确认无语法报错。
-请基于以下要求生成日志分析代码：
-1. 输入数据为 `data_dict`（键为文件名，值为pandas.DataFrame），需先检查文件是否存在及非空。
-2. 处理逻辑必须：
-   - 调用 `unique()`/`idxmax()` 等方法前，确认对象是非空Series（`isinstance(obj, pd.Series) and not obj.empty`）；
-   - 访问列前用 `col in df.columns` 验证，避免KeyError；
-   - 空数据场景需在 `summary` 中说明，不执行无效操作。
-3. 生成结果需包含 `result_table`（DataFrame）、`summary`（字符串）、`chart_info`（字典，含chart_type/title/data_prep）。
-4. 代码中需处理可能的异常（如AttributeError/KeyError），并在summary中提示具体错误原因。
-5. 保留数据中`PROTECTEDXXXXXXXX`格式的去敏字段，不做修改。
+   }}
+   - 生成前必须验证`x_col`/`y_col`/`values`对应的列存在于`result_table.columns`中
+   - 若列名与用户需求不一致，需在`summary`中说明对应关系
+   - 若所需列不存在，需将`chart_info`设为`None`并在`summary`说明原因
+
+### 三、数据处理强制规则
+1. 多文件合并：必须先通过`df = pd.concat(data_dict.values(), ignore_index=True)`合并数据为`df`后再处理
+2. 列操作前置检查：访问列前必须用`col in df.columns`验证，避免KeyError
+3. 空数据处理：
+   - 调用`unique()`/`idxmax()`/`idxmin()`/`argmax()`/`argmin()`前，必须检查：
+     `if isinstance(obj, pd.Series) and not obj.empty and obj.notna().any()`
+   - 空数据场景需在`summary`中说明（如"因数据为空，无法计算最大值"）
+4. 分组数据处理：`groupby`后需检查每个分组是否为空再进行聚合操作
+5. 索引重置：优先使用`reset_index(drop=True)`避免引入多余索引列
+6. 同义表头处理：需统一命名并整合内容，重命名时确保新列名数量与实际列数一致
+
+### 四、代码语法与执行规范
+1. 仅返回可直接执行的代码，无任何说明文字
+2. 变量/函数使用前必须定义，确保无未定义错误
+3. 处理可能的异常（AttributeError/KeyError等），并在`summary`中提示具体错误原因
+4. 严格检查括号完整性（圆括号/方括号/花括号必须成对，嵌套正确）
+5. 函数调用必须包含必要参数（如`pd.concat`需传入DataFrame列表）
+6. 语句末尾无多余逗号/括号，避免语法错误
+7. Pandas方法使用官方支持参数（如`reset_index`不支持`name`参数，重命名用`rename()`）
+8. 数值列保持整数/浮点类型，避免转为字符串导致计算错误
+
+请基于上述规范，根据用户的日志分析需求生成代码，确保代码符合项目代码逻辑且可直接执行。
 """
 
         response = self.client.completions_create(

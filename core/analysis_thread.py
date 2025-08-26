@@ -48,69 +48,76 @@ class AnalysisThread(QThread):
         return cleaned.strip()
 
     def execute_cleaned_code(self, cleaned_code, data_dict):
-        """执行代码并简化图表配置校验，使用预加载的数据"""
-        full_code = f"{cleaned_code}\n"
+        """执行代码并增强鲁棒性，确保核心变量始终被定义"""
+        # 1. 预初始化所有可能用到的变量（包括df），设置默认值
         local_vars = {
             'data_dict': data_dict,
             'pd': pd,
-            'np': np
+            'np': np,
+            # 强制初始化必须返回的变量
+            'result_table': pd.DataFrame(),
+            'summary': '分析完成但未生成有效总结',
+            'chart_info': None,
+            # 关键：提前初始化df，避免AI生成代码遗漏定义
+            'df': pd.DataFrame()  # 新增df的默认初始化
         }
 
         try:
+            # 2. 安全检查代码（去除多余缩进，确保语法正确）
+            safety_check_code = """
+# 生成代码执行前的安全检查
+if not isinstance(data_dict, dict):
+    raise ValueError("data_dict必须是字典类型")
+for key, val in data_dict.items():
+    if not isinstance(val, pd.DataFrame):
+        raise TypeError(f"数据 {key} 不是DataFrame类型")
+    """
+            full_code = f"{safety_check_code}\n{cleaned_code}"
             exec(full_code, globals(), local_vars)
+
+            # 3. 提取变量时再次校验类型
             result_table = local_vars.get('result_table')
-            # 强制获取总结并进行敏感词还原（确保代码生成模式下必然执行）
+            if not isinstance(result_table, pd.DataFrame):
+                result_table = pd.DataFrame()
+                local_vars['summary'] += "\n警告：result_table类型异常，已自动修正为空表"
+
+            # 4. 敏感词还原（适配表格中PROTECTE开头的敏感词）
             summary = local_vars.get('summary', '分析完成但未生成总结')
-            # 关键修改：无论何种情况都对总结执行还原处理
             summary = self.processor.sensitive_processor.restore_sensitive_words(summary)
 
-            chart_info = local_vars.get('chart_info', None)
-
-            # 还原表格数据（处理字符串列）
-            if result_table is not None and isinstance(result_table, pd.DataFrame):
+            # 还原表格中的敏感词（针对所有字符串列）
+            if isinstance(result_table, pd.DataFrame) and not result_table.empty:
                 for col in result_table.columns:
                     if result_table[col].dtype == 'object':
                         result_table[col] = result_table[col].apply(
-                            lambda x: self.processor.sensitive_processor.restore_sensitive_words(str(x)) if pd.notna(
-                                x) else x
+                            lambda x: self.processor.sensitive_processor.restore_sensitive_words(str(x))
+                            if pd.notna(x) else x
                         )
 
-            # 还原图表信息中的文本
-            if chart_info and isinstance(chart_info, dict):
+            # 处理图表信息
+            chart_info = local_vars.get('chart_info', None)
+            if isinstance(chart_info, dict):
+                # 还原图表标题中的敏感词
                 if 'title' in chart_info:
                     chart_info['title'] = self.processor.sensitive_processor.restore_sensitive_words(
                         chart_info['title'])
-                if 'data_prep' in chart_info and isinstance(chart_info['data_prep'], dict):
-                    for key, value in chart_info['data_prep'].items():
-                        if isinstance(value, str):
-                            chart_info['data_prep'][key] = self.processor.sensitive_processor.restore_sensitive_words(
-                                value)
-
-            # 图表配置校验警告
-            if chart_info and isinstance(chart_info, dict):
-                top_required = ["chart_type", "title", "data_prep"]
-                missing_top = [f for f in top_required if f not in chart_info]
-                if missing_top:
-                    summary += f"\n警告：图表配置缺少顶级字段 {missing_top}"
-                data_prep = chart_info.get("data_prep", {})
-                if not isinstance(data_prep, dict):
-                    summary += "\n警告：data_prep必须是字典类型"
-                    chart_info["data_prep"] = {}
-
-            if result_table is None:
-                result_table = pd.concat(data_dict.values(), ignore_index=True)
-                summary = "未生成有效分析结果，返回原始数据合并表格\n" + summary
 
             return {
                 "result_table": result_table,
                 "summary": summary,
                 "chart_info": chart_info
             }
+
         except Exception as e:
-            # 对错误信息也进行敏感词还原
-            error_msg = f"代码执行错误: {str(e)}\n\n执行的代码:\n{full_code}"
+            # 错误提示更精准，结合表格特点
+            error_msg = (
+                f"代码执行错误: {str(e)}\n"
+                f"错误位置提示: 可能是敏感词处理冲突或df初始化异常\n"
+                f"当前表格特征: 包含PROTECTE开头的敏感词替换字段，共{len(data_dict)}个数据表\n"
+                f"执行的代码:\n{full_code}"
+            )
             return {
                 "summary": self.processor.sensitive_processor.restore_sensitive_words(error_msg),
-                "result_table": None,
+                "result_table": pd.DataFrame(),
                 "chart_info": None
             }
