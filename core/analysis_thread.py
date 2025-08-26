@@ -58,8 +58,7 @@ class AnalysisThread(QThread):
             'result_table': pd.DataFrame(),
             'summary': '分析完成但未生成有效总结',
             'chart_info': None,
-            # 关键：提前初始化df，避免AI生成代码遗漏定义
-            'df': pd.DataFrame()  # 新增df的默认初始化
+            'df': pd.DataFrame()  # 强制提前初始化df，优先级最高
         }
 
         try:

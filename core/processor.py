@@ -244,6 +244,11 @@ class LogAIProcessor:
 
 请根据用户需求生成日志分析代码，生成代码时必须严格遵循以下与项目代码适配的规范，确保代码可直接执行且符合项目逻辑：
 
+1. 核心变量：必须在所有分支中定义`df = pd.DataFrame()`，异常时需在`except`中重置
+2. 数据处理：使用传入的`data_dict`（禁止重新定义），合并数据用`pd.concat(data_dict.values())`
+3. 空数据处理：判断`data_dict`为空时，`df`设为空表并在`summary`说明
+4. 必须返回：`result_table`（DataFrame）、`summary`（str）、`chart_info`（dict/None）
+
 ### 一、数据源与基础环境说明
 1. **变量定义强制约束**：
    - df变量必须全局定义，且必须是pandas.DataFrame类型，禁止使用其他变量名。
